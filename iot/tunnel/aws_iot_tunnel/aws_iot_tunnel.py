@@ -4,64 +4,38 @@
 ===============================================================================
 Script Name: aws_iot_tunnel.py
 Description: Sets up and manages a secure tunnel to an AWS IoT device.
-Usage: ./aws_iot_tunnel.py --profile <aws_profile> --thing-name <thing_name> [--region <region>] [--port <port>]
+Usage: ./aws_iot_tunnel.py --thing-name <thing_name> [--port <port>] [--profile <aws_profile>] [--region <region>]
 Requirements:
   - boto3
-  - Docker
+  - docker
   - Python 3.x
 ===============================================================================
 """
 
 import argparse
-import subprocess
+import boto3
+import docker
+import docker.errors
 import sys
-import json
+import os
 import platform
-import shlex
-from typing import List, Optional
+from typing import Optional
 
 # Constants
-SERVICE_TYPE = "SSH"  # Service type for the tunnel
+DEFAULT_SERVICE = "SSH"  # Service type for the tunnel
 DEFAULT_PORT = 5555  # Default port for Docker
-
-
-def run_aws_cli_command(command_list: List[str]) -> str:
-    """
-    Run an AWS CLI command and return the output.
-    Exits the script if the command fails.
-    """
-    try:
-        result = subprocess.run(command_list, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        return result.stdout.decode("utf-8")
-    except subprocess.CalledProcessError as e:
-        error_message = e.stderr.decode("utf-8").strip()
-        print(f"Error executing command: {' '.join(command_list)}\n{error_message}", file=sys.stderr)
-        sys.exit(1)
-
-
-def get_default_region(profile_name: Optional[str] = None) -> str:
-    """
-    Get the default AWS region for the specified profile.
-    """
-    command = f"aws configure get region --profile {profile_name}" if profile_name else "aws configure get region"
-    command_list = shlex.split(command)
-    return run_aws_cli_command(command_list).strip()
 
 
 def parse_arguments() -> argparse.Namespace:
     """Parse and return command-line arguments."""
     parser = argparse.ArgumentParser(description="Sets up and manages a secure tunnel to an AWS IoT device.")
-    parser.add_argument("-p", "--profile", type=str, required=True, help="AWS profile to use")
+
     parser.add_argument("-t", "--thing-name", type=str, required=True, help="AWS IoT Thing name")
+    parser.add_argument("-p", "--profile", type=str, help="AWS profile to use")
     parser.add_argument("-r", "--region", type=str, help="AWS region to use")
     parser.add_argument("-P", "--port", type=int, default=DEFAULT_PORT, help="Port to bind")
 
     args = parser.parse_args()
-
-    # Set default region if not provided
-    if not args.region:
-        args.region = get_default_region(args.profile)
-
     return args
 
 
@@ -88,76 +62,82 @@ def configure_environment() -> str:
 
 
 class SecureTunnel:
-    def __init__(self, profile: str, thing_name: str, region: str, port: int = DEFAULT_PORT) -> None:
-        self.profile = profile
+    def __init__(self, thing_name: str, port: int, profile: Optional[str] = None, region: Optional[str] = None) -> None:
         self.thing_name = thing_name
-        self.region = region
         self.port = port
+
+        if profile:
+            os.environ["AWS_PROFILE"] = profile
+        if region:
+            os.environ["AWS_REGION"] = region
+
+        self.session = boto3.Session()
+        self.client = self.session.client("iotsecuretunneling")
+
+    def get_region_name(self) -> str:
+        """
+        Retrieve and returns the AWS region name.
+        """
+        region_name = self.session.region_name
+        if not region_name:
+            print("Error: Failed to get AWS region name.", file=sys.stderr)
+            sys.exit(1)
+        return region_name
 
     def _get_existing_tunnel_id(self) -> Optional[str]:
         """
         Retrieve the first existing OPEN tunnel ID for the specified IoT Thing.
         Returns the tunnel ID if found, else None.
         """
-        command = f"""
-        aws iotsecuretunneling list-tunnels
-        --thing-name {self.thing_name} \
-        --region {self.region} \
-        --profile {self.profile}
-        """
-
-        command_list = shlex.split(command)
-        response = run_aws_cli_command(command_list)
         try:
-            tunnels = json.loads(response)
-            for tunnel in tunnels.get("tunnelSummaries", []):
+            response = self.client.list_tunnels(thingName=self.thing_name)
+            tunnels = response.get("tunnelSummaries", [])
+            for tunnel in tunnels:
                 if tunnel.get("status") == "OPEN":
                     return tunnel.get("tunnelId")
-        except json.JSONDecodeError:
-            print("Error: Failed to parse JSON response from AWS CLI.", file=sys.stderr)
+        except:
+            print("Error: Failed to get existing tunnel id.", file=sys.stderr)
             sys.exit(1)
         return None
 
-    def _rotate_source_access_token(self, tunnel_id: str) -> dict:
+    def _rotate_access_tokens(self, tunnel_id: str) -> dict:
         """
         Rotate the source access token for an existing tunnel.
-        Returns the JSON response from AWS CLI.
+        Returns the response.
         """
-        command = f"""
-        aws iotsecuretunneling rotate-tunnel-access-token \
-        --tunnel-id {tunnel_id} \
-        --client-mode ALL \
-        --destination-config thingName={self.thing_name},services={SERVICE_TYPE} \
-        --region {self.region} \
-        --profile {self.profile}
-        """
-
-        command_list = shlex.split(command)
-        response = run_aws_cli_command(command_list)
         try:
-            return json.loads(response)
-        except json.JSONDecodeError:
-            print("Error: Failed to parse JSON response from AWS CLI.", file=sys.stderr)
+            response = self.client.rotate_tunnel_access_token(
+                tunnelId=tunnel_id,
+                clientMode="ALL",
+                destinationConfig={
+                    "thingName": self.thing_name,
+                    "services": [
+                        DEFAULT_SERVICE,
+                    ],
+                },
+            )
+            return response
+        except:
+            print("Error: Failed to rotate access tokens.", file=sys.stderr)
             sys.exit(1)
 
     def _open_new_tunnel(self) -> dict:
         """
         Open a new tunnel for the specified IoT Thing.
-        Returns the JSON response from AWS CLI.
+        Returns the response.
         """
-        command = f"""
-        aws iotsecuretunneling open-tunnel \
-        --destination-config thingName={self.thing_name},services={SERVICE_TYPE} \
-        --region {self.region} \
-        --profile {self.profile}
-        """
-
-        command_list = shlex.split(command)
-        response = run_aws_cli_command(command_list)
         try:
-            return json.loads(response)
-        except json.JSONDecodeError:
-            print("Error: Failed to parse JSON response from AWS CLI.", file=sys.stderr)
+            response = self.client.open_tunnel(
+                destinationConfig={
+                    "thingName": self.thing_name,
+                    "services": [
+                        DEFAULT_SERVICE,
+                    ],
+                }
+            )
+            return response
+        except:
+            print("Error: Failed to open new tunnel.", file=sys.stderr)
             sys.exit(1)
 
     def get_token(self) -> str:
@@ -169,8 +149,8 @@ class SecureTunnel:
 
         if existing_tunnel_id:
             print(f"Found existing tunnel ID: {existing_tunnel_id}")
-            print(f"Rotating source access token for tunnel ID: {existing_tunnel_id}")
-            response = self._rotate_source_access_token(existing_tunnel_id)
+            print(f"Rotating access tokens for tunnel ID: {existing_tunnel_id}")
+            response = self._rotate_access_tokens(existing_tunnel_id)
         else:
             print("No existing tunnel found. Opening a new tunnel...")
             response = self._open_new_tunnel()
@@ -186,43 +166,38 @@ class SecureTunnel:
         return source_access_token
 
 
-def run_docker_container(region: str, docker_image: str, thing_name: str, source_access_token: str, port: int):
+def run_docker_container(region_name: str, docker_image: str, thing_name: str, source_access_token: str, port: int):
     """
-    Run the Docker container for the tunnel.
+    Run the Docker container for the tunnel using the Docker SDK.
     Stops the container if it's already running before starting a new one.
     """
+    client = docker.from_env()
+
     # Check if the container is already running
     try:
-        running_containers = (
-            subprocess.check_output(["docker", "ps", "-q", "-f", f"name={thing_name}"]).decode().strip()
-        )
-        if running_containers:
+        existing_container = client.containers.list(filters={"name": thing_name})
+        if existing_container:
             print(f"Container '{thing_name}' is already running. Stopping the container...")
-            subprocess.run(["docker", "stop", thing_name], check=True)
+            existing_container[0].stop()
             print(f"Container '{thing_name}' stopped successfully.")
-    except subprocess.CalledProcessError as e:
+    except docker.errors.DockerException as e:
         print(f"Error checking or stopping container: {e}", file=sys.stderr)
         sys.exit(1)
 
     # Run the new Docker container
-    docker_command = f"""
-    docker run --rm -d --name {thing_name} \
-    -e AWSIOT_TUNNEL_ACCESS_TOKEN={source_access_token} \
-    -p {port}:{port} \
-    {docker_image} \
-    --region {region} \
-    -b 0.0.0.0 \
-    -s {port} \
-    -c /etc/ssl/certs \
-    --destination-client-type V1
-    """
-
-    docker_command_list = shlex.split(docker_command)
-
     try:
-        subprocess.run(docker_command_list, check=True)
+        print(f"Starting Docker container '{thing_name}' with image '{docker_image}'...")
+        client.containers.run(
+            image=docker_image,
+            name=thing_name,
+            environment={"AWSIOT_TUNNEL_ACCESS_TOKEN": source_access_token},
+            ports={f"{port}/tcp": port},
+            detach=True,
+            remove=True,  # Automatically removes the container when it stops
+            command=f"--region {region_name} -b 0.0.0.0 -s {port} -c /etc/ssl/certs --destination-client-type V1",
+        )
         print(f"Docker container '{thing_name}' started successfully on port {port}.")
-    except subprocess.CalledProcessError as e:
+    except docker.errors.DockerException as e:
         print(f"Error: Failed to start Docker container: {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -231,9 +206,10 @@ def main():
     """Main execution flow."""
     args = parse_arguments()
     docker_image = configure_environment()
-    secure_tunnel = SecureTunnel(args.profile, args.thing_name, args.region, args.port)
+    secure_tunnel = SecureTunnel(args.thing_name, args.port, args.profile, args.region)
     source_access_token = secure_tunnel.get_token()
-    run_docker_container(args.region, docker_image, args.thing_name, source_access_token, args.port)
+    region_name = secure_tunnel.get_region_name()
+    run_docker_container(region_name, docker_image, args.thing_name, source_access_token, args.port)
 
 
 if __name__ == "__main__":
