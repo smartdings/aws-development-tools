@@ -4,7 +4,7 @@ setup(
     name="aws-iot-tunnel",
     version="0.2",
     packages=find_packages(),
-    install_requires=[],
+    install_requires=["boto3>=1.20.0"],
     entry_points={
         "console_scripts": [
             "aws-iot-tunnel=aws_iot_tunnel.aws_iot_tunnel:main",

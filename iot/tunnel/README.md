@@ -18,7 +18,7 @@ The `aws_iot_tunnel.py` script sets up and manages a secure tunnel to an AWS IoT
 Before running the script, ensure you have the following installed:
 
 - **Python 3.x**
-- **AWS CLI**: Configure your AWS credentials and default region.
+- **boto3**: To manage secure tunneling (automatically installed with pip).
 - **Docker**: Required to run the tunnel in a container.
 
 ## Installation
@@ -67,7 +67,7 @@ aws-iot-tunnel --profile myawsprofile --thing-name MyIoTThing --region us-west-2
 
 ## How It Works
 
-1. **AWS CLI Commands**: The script interacts with the AWS IoT Secure Tunneling service using AWS CLI commands to manage tunnels and rotate access tokens.
+1. **boto3 SDK**: The script interacts with the AWS IoT Secure Tunneling service using boto3 SDK to manage tunnels and rotate access tokens.
 2. **Docker Integration**: It runs a Docker container configured for the appropriate architecture to establish a secure tunnel to the specified IoT device.
 3. **Token Management**: The script checks for existing tunnels and manages the source access tokens required for secure communication.
 

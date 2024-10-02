@@ -6,7 +6,7 @@ Script Name: aws_iot_tunnel.py
 Description: Sets up and manages a secure tunnel to an AWS IoT device.
 Usage: ./aws_iot_tunnel.py --profile <aws_profile> --thing-name <thing_name> [--region <region>] [--port <port>]
 Requirements:
-  - AWS CLI
+  - boto3
   - Docker
   - Python 3.x
 ===============================================================================
