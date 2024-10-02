@@ -87,99 +87,103 @@ def configure_environment() -> str:
     return docker_image
 
 
-def get_existing_tunnel_id(profile: str, region: str, thing_name: str) -> Optional[str]:
-    """
-    Retrieve the first existing OPEN tunnel ID for the specified IoT Thing.
-    Returns the tunnel ID if found, else None.
-    """
-    command = f"""
-    aws iotsecuretunneling list-tunnels
-    --thing-name {thing_name} \
-    --region {region} \
-    --profile {profile}
-    """
+class SecureTunnel:
+    def __init__(self, profile: str, thing_name: str, region: str, port: int = DEFAULT_PORT) -> None:
+        self.profile = profile
+        self.thing_name = thing_name
+        self.region = region
+        self.port = port
 
-    command_list = shlex.split(command)
-    response = run_aws_cli_command(command_list)
-    try:
-        tunnels = json.loads(response)
-        for tunnel in tunnels.get("tunnelSummaries", []):
-            if tunnel.get("status") == "OPEN":
-                return tunnel.get("tunnelId")
-    except json.JSONDecodeError:
-        print("Error: Failed to parse JSON response from AWS CLI.", file=sys.stderr)
-        sys.exit(1)
-    return None
+    def _get_existing_tunnel_id(self) -> Optional[str]:
+        """
+        Retrieve the first existing OPEN tunnel ID for the specified IoT Thing.
+        Returns the tunnel ID if found, else None.
+        """
+        command = f"""
+        aws iotsecuretunneling list-tunnels
+        --thing-name {self.thing_name} \
+        --region {self.region} \
+        --profile {self.profile}
+        """
 
+        command_list = shlex.split(command)
+        response = run_aws_cli_command(command_list)
+        try:
+            tunnels = json.loads(response)
+            for tunnel in tunnels.get("tunnelSummaries", []):
+                if tunnel.get("status") == "OPEN":
+                    return tunnel.get("tunnelId")
+        except json.JSONDecodeError:
+            print("Error: Failed to parse JSON response from AWS CLI.", file=sys.stderr)
+            sys.exit(1)
+        return None
 
-def rotate_source_access_token(profile: str, region: str, thing_name: str, tunnel_id: str) -> dict:
-    """
-    Rotate the source access token for an existing tunnel.
-    Returns the JSON response from AWS CLI.
-    """
-    command = f"""
-    aws iotsecuretunneling rotate-tunnel-access-token \
-    --tunnel-id {tunnel_id} \
-    --client-mode ALL \
-    --destination-config thingName={thing_name},services={SERVICE_TYPE} \
-    --region {region} \
-    --profile {profile}
-    """
+    def _rotate_source_access_token(self, tunnel_id: str) -> dict:
+        """
+        Rotate the source access token for an existing tunnel.
+        Returns the JSON response from AWS CLI.
+        """
+        command = f"""
+        aws iotsecuretunneling rotate-tunnel-access-token \
+        --tunnel-id {tunnel_id} \
+        --client-mode ALL \
+        --destination-config thingName={self.thing_name},services={SERVICE_TYPE} \
+        --region {self.region} \
+        --profile {self.profile}
+        """
 
-    command_list = shlex.split(command)
-    response = run_aws_cli_command(command_list)
-    try:
-        return json.loads(response)
-    except json.JSONDecodeError:
-        print("Error: Failed to parse JSON response from AWS CLI.", file=sys.stderr)
-        sys.exit(1)
+        command_list = shlex.split(command)
+        response = run_aws_cli_command(command_list)
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError:
+            print("Error: Failed to parse JSON response from AWS CLI.", file=sys.stderr)
+            sys.exit(1)
 
+    def _open_new_tunnel(self) -> dict:
+        """
+        Open a new tunnel for the specified IoT Thing.
+        Returns the JSON response from AWS CLI.
+        """
+        command = f"""
+        aws iotsecuretunneling open-tunnel \
+        --destination-config thingName={self.thing_name},services={SERVICE_TYPE} \
+        --region {self.region} \
+        --profile {self.profile}
+        """
 
-def open_new_tunnel(profile: str, region: str, thing: str) -> dict:
-    """
-    Open a new tunnel for the specified IoT Thing.
-    Returns the JSON response from AWS CLI.
-    """
-    command = f"""
-    aws iotsecuretunneling open-tunnel \
-    --destination-config thingName={thing},services={SERVICE_TYPE} \
-    --region {region} \
-    --profile {profile}
-    """
+        command_list = shlex.split(command)
+        response = run_aws_cli_command(command_list)
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError:
+            print("Error: Failed to parse JSON response from AWS CLI.", file=sys.stderr)
+            sys.exit(1)
 
-    command_list = shlex.split(command)
-    response = run_aws_cli_command(command_list)
-    try:
-        return json.loads(response)
-    except json.JSONDecodeError:
-        print("Error: Failed to parse JSON response from AWS CLI.", file=sys.stderr)
-        sys.exit(1)
+    def get_token(self) -> str:
+        """
+        Manage the tunnel by retrieving an existing one or creating a new one.
+        Returns the source access token.
+        """
+        existing_tunnel_id = self._get_existing_tunnel_id()
 
+        if existing_tunnel_id:
+            print(f"Found existing tunnel ID: {existing_tunnel_id}")
+            print(f"Rotating source access token for tunnel ID: {existing_tunnel_id}")
+            response = self._rotate_source_access_token(existing_tunnel_id)
+        else:
+            print("No existing tunnel found. Opening a new tunnel...")
+            response = self._open_new_tunnel()
 
-def manage_tunnel(profile: str, region: str, thing_name: str) -> str:
-    """
-    Manage the tunnel by retrieving an existing one or creating a new one.
-    Returns the source access token.
-    """
-    existing_tunnel_id = get_existing_tunnel_id(profile, region, thing_name)
+        source_access_token = response.get("sourceAccessToken")
 
-    if existing_tunnel_id:
-        print(f"Found existing tunnel ID: {existing_tunnel_id}")
-        print(f"Rotating source access token for tunnel ID: {existing_tunnel_id}")
-        response = rotate_source_access_token(profile, region, thing_name, existing_tunnel_id)
-    else:
-        print("No existing tunnel found. Opening a new tunnel...")
-        response = open_new_tunnel(profile, region, thing_name)
+        # Validate source access token
+        if not source_access_token or source_access_token.lower() == "null":
+            print("Error: Failed to retrieve source access token.", file=sys.stderr)
+            sys.exit(1)
 
-    source_access_token = response.get("sourceAccessToken")
-
-    # Validate source access token
-    if not source_access_token or source_access_token.lower() == "null":
-        print("Error: Failed to retrieve source access token.", file=sys.stderr)
-        sys.exit(1)
-
-    print("Source access token obtained successfully.")
-    return source_access_token
+        print("Source access token obtained successfully.")
+        return source_access_token
 
 
 def run_docker_container(region: str, docker_image: str, thing_name: str, source_access_token: str, port: int):
@@ -227,7 +231,8 @@ def main():
     """Main execution flow."""
     args = parse_arguments()
     docker_image = configure_environment()
-    source_access_token = manage_tunnel(args.profile, args.region, args.thing_name)
+    secure_tunnel = SecureTunnel(args.profile, args.thing_name, args.region, args.port)
+    source_access_token = secure_tunnel.get_token()
     run_docker_container(args.region, docker_image, args.thing_name, source_access_token, args.port)
 
 
