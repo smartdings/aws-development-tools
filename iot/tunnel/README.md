@@ -39,32 +39,33 @@ Before running the script, ensure you have the following installed:
 
 ## Usage
 
-To use the script, you need to provide the Thing name, and optionally specify the port, profile and region.
+To use the script, you need to provide the Thing name, and optionally specify the port, profile, region and flag to remove ssh fingerprint.
 
 ```bash
-aws-iot-tunnel --thing-name <thing_name> [--port <port>] [--profile <aws_profile>] [--region <region>]
+aws-iot-tunnel --thing-name <thing_name> [--port <port>] [--profile <aws_profile>] [--region <region>] [--remove-fingerprint]
 ```
 
 OR
 
 ```bash
-./aws_iot_tunnel.py --thing-name <thing_name> [--port <port>] [--profile <aws_profile>] [--region <region>]
+./aws_iot_tunnel.py --thing-name <thing_name> [--port <port>] [--profile <aws_profile>] [--region <region>] [--remove-fingerprint]
 ```
 
 ### Example
 
 ```bash
-aws-iot-tunnel --thing-name MyIoTThing --profile myawsprofile --region us-west-2
+aws-iot-tunnel -t MyIoTThing -p myawsprofile -r us-west-2
 ```
 
 ## Command-Line Arguments
 
-| Argument          | Short Form | Type   | Required | Description                                            |
-|-------------------|------------|--------|----------|--------------------------------------------------------|
-| `--thing-name`    | `-t`       | string | Yes      | Name of the AWS IoT Thing to connect to.               |
-| `--port`          | `-P`       | int    | No       | Port to bind (defaults to `5555`).                     |
-| `--profile`       | `-p`       | string | No       | AWS profile to use for authentication.                 |
-| `--region`        | `-r`       | string | No       | AWS region to use (defaults to the configured region). |
+| Argument               | Short Form | Type   | Required | Description                                             |
+|------------------------|------------|--------|----------|---------------------------------------------------------|
+| `--thing-name`         | `-t`       | string | Yes      | Name of the AWS IoT Thing to connect to.                |
+| `--port`               | `-P`       | int    | No       | Port to bind (defaults to `5555`).                      |
+| `--profile`            | `-p`       | string | No       | AWS profile to use for authentication.                  |
+| `--region`             | `-r`       | string | No       | AWS region to use (defaults to the configured region).  |
+| `--remove-fingerprint` | `-R`       |        | No       | Remove SSH fingerprint on localhost with specified port.|
 
 ## How It Works
 

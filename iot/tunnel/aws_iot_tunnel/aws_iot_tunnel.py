@@ -4,7 +4,7 @@
 ===============================================================================
 Script Name: aws_iot_tunnel.py
 Description: Sets up and manages a secure tunnel to an AWS IoT device.
-Usage: ./aws_iot_tunnel.py --thing-name <thing_name> [--port <port>] [--profile <aws_profile>] [--region <region>]
+Usage: ./aws_iot_tunnel.py --thing-name <thing_name> [--port <port>] [--profile <aws_profile>] [--region <region>] [--remove-fingerprint]
 Requirements:
   - boto3
   - docker
@@ -16,13 +16,14 @@ import argparse
 import boto3
 import docker
 import docker.errors
+import subprocess
 import sys
-import os
 import platform
-from typing import Optional
+from typing import Dict, Literal, Optional, Union
 
 # Constants
 DEFAULT_SERVICE = "SSH"  # Service type for the tunnel
+DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 5555  # Default port for Docker
 
 
@@ -34,6 +35,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("-p", "--profile", type=str, help="AWS profile to use")
     parser.add_argument("-r", "--region", type=str, help="AWS region to use")
     parser.add_argument("-P", "--port", type=int, default=DEFAULT_PORT, help="Port to bind")
+
+    parser.add_argument("-R", "--remove-fingerprint", action="store_true", help="Remove SSH fingerprint")
 
     args = parser.parse_args()
     return args
@@ -66,23 +69,12 @@ class SecureTunnel:
         self.thing_name = thing_name
         self.port = port
 
-        if profile:
-            os.environ["AWS_PROFILE"] = profile
-        if region:
-            os.environ["AWS_REGION"] = region
-
-        self.session = boto3.Session()
-        self.client = self.session.client("iotsecuretunneling")
-
-    def get_region_name(self) -> str:
-        """
-        Retrieve and returns the AWS region name.
-        """
-        region_name = self.session.region_name
-        if not region_name:
-            print("Error: Failed to get AWS region name.", file=sys.stderr)
+        try:
+            self.session = boto3.Session(profile_name=profile, region_name=region)
+            self.client = self.session.client("iotsecuretunneling")
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
-        return region_name
 
     def _get_existing_tunnel_id(self) -> Optional[str]:
         """
@@ -95,30 +87,47 @@ class SecureTunnel:
             for tunnel in tunnels:
                 if tunnel.get("status") == "OPEN":
                     return tunnel.get("tunnelId")
-        except:
-            print("Error: Failed to get existing tunnel id.", file=sys.stderr)
+        except Exception as e:
+            print(f"Error: Failed to get existing tunnel id. {e}", file=sys.stderr)
             sys.exit(1)
+
         return None
 
-    def _rotate_access_tokens(self, tunnel_id: str) -> dict:
+    def _get_access_token_client_mode(self, tunnel_id: str) -> Literal["ALL", "SOURCE"]:
+        try:
+            response = self.client.describe_tunnel(tunnelId=tunnel_id)
+            destination_connection_state = (
+                response.get("tunnel", {}).get("destinationConnectionState", {}).get("status")
+            )
+            if destination_connection_state == "CONNECTED":
+                return "SOURCE"
+            return "ALL"
+        except Exception as e:
+            print(f"Error: Failed to get access token client mode. {e}", file=sys.stderr)
+            sys.exit(1)
+
+    def _rotate_access_tokens(self, tunnel_id: str, client_mode: Literal["ALL", "SOURCE"]) -> dict:
         """
-        Rotate the source access token for an existing tunnel.
+        Rotate the access tokens for an existing tunnel.
         Returns the response.
         """
         try:
-            response = self.client.rotate_tunnel_access_token(
-                tunnelId=tunnel_id,
-                clientMode="ALL",
-                destinationConfig={
-                    "thingName": self.thing_name,
-                    "services": [
-                        DEFAULT_SERVICE,
-                    ],
-                },
-            )
+            kwargs: Dict[str, Union[str, object]] = {"tunnelId": tunnel_id, "clientMode": client_mode}
+            if client_mode == "ALL":
+                kwargs.update(
+                    {
+                        "destinationConfig": {
+                            "thingName": self.thing_name,
+                            "services": [
+                                DEFAULT_SERVICE,
+                            ],
+                        }
+                    }
+                )
+            response = self.client.rotate_tunnel_access_token(**kwargs)
             return response
-        except:
-            print("Error: Failed to rotate access tokens.", file=sys.stderr)
+        except Exception as e:
+            print(f"Error: Failed to rotate access tokens. {e}", file=sys.stderr)
             sys.exit(1)
 
     def _open_new_tunnel(self) -> dict:
@@ -136,8 +145,8 @@ class SecureTunnel:
                 }
             )
             return response
-        except:
-            print("Error: Failed to open new tunnel.", file=sys.stderr)
+        except Exception as e:
+            print(f"Error: Failed to open new tunnel. {e}", file=sys.stderr)
             sys.exit(1)
 
     def get_token(self) -> str:
@@ -149,8 +158,9 @@ class SecureTunnel:
 
         if existing_tunnel_id:
             print(f"Found existing tunnel ID: {existing_tunnel_id}")
-            print(f"Rotating access tokens for tunnel ID: {existing_tunnel_id}")
-            response = self._rotate_access_tokens(existing_tunnel_id)
+            client_mode = self._get_access_token_client_mode(existing_tunnel_id)
+            print(f"Rotating access tokens for tunnel ID: {existing_tunnel_id} in client mode {client_mode}")
+            response = self._rotate_access_tokens(existing_tunnel_id, client_mode)
         else:
             print("No existing tunnel found. Opening a new tunnel...")
             response = self._open_new_tunnel()
@@ -166,6 +176,25 @@ class SecureTunnel:
         return source_access_token
 
 
+def delete_ssh_fingerprint(hostname: str, port: int):
+    """
+    Deletes the SSH fingerprint for a given hostname and port using ssh-keygen.
+
+    Args:
+        hostname (str): The hostname of the server.
+        port (int): The port of the server.
+
+    Returns:
+        None
+    """
+    try:
+        host_with_port = f"[{hostname}]:{port}"
+        subprocess.run(["ssh-keygen", "-R", host_with_port], check=True)
+        print(f"Deleted SSH fingerprint for {host_with_port} from known_hosts.")
+    except subprocess.CalledProcessError as e:
+        print(f"Error deleting fingerprint: {e}", file=sys.stderr)
+
+
 def run_docker_container(region_name: str, docker_image: str, thing_name: str, source_access_token: str, port: int):
     """
     Run the Docker container for the tunnel using the Docker SDK.
@@ -179,6 +208,7 @@ def run_docker_container(region_name: str, docker_image: str, thing_name: str, s
         if existing_container:
             print(f"Container '{thing_name}' is already running. Stopping the container...")
             existing_container[0].stop()
+            existing_container[0].wait()
             print(f"Container '{thing_name}' stopped successfully.")
     except docker.errors.DockerException as e:
         print(f"Error checking or stopping container: {e}", file=sys.stderr)
@@ -194,7 +224,7 @@ def run_docker_container(region_name: str, docker_image: str, thing_name: str, s
             ports={f"{port}/tcp": port},
             detach=True,
             remove=True,  # Automatically removes the container when it stops
-            command=f"--region {region_name} -b 0.0.0.0 -s {port} -c /etc/ssl/certs --destination-client-type V1",
+            command=f"--region {region_name} -b {DEFAULT_HOST} -s {port} -c /etc/ssl/certs --destination-client-type V1",
         )
         print(f"Docker container '{thing_name}' started successfully on port {port}.")
     except docker.errors.DockerException as e:
@@ -206,10 +236,15 @@ def main():
     """Main execution flow."""
     args = parse_arguments()
     docker_image = configure_environment()
+
     secure_tunnel = SecureTunnel(args.thing_name, args.port, args.profile, args.region)
     source_access_token = secure_tunnel.get_token()
-    region_name = secure_tunnel.get_region_name()
-    run_docker_container(region_name, docker_image, args.thing_name, source_access_token, args.port)
+    region_name = secure_tunnel.session.region_name
+
+    run_docker_container(region_name, docker_image, args.thing_name, source_access_token, args.port)  # type: ignore
+
+    if args.remove_fingerprint:
+        delete_ssh_fingerprint("localhost", args.port)
 
 
 if __name__ == "__main__":
