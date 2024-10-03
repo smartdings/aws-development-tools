@@ -20,7 +20,7 @@ Before running the script, ensure you have the following installed:
 - **Python 3.x**
 - **Docker**: Required to run the tunnel in a container.
 - **boto3 (AWS SDK)**: To manage secure tunneling (automatically installed with pip).
-- **docker (python SDK)**: To manage docker container (automatically installed with pip).
+- **docker (Docker SDK)**: To manage docker container (automatically installed with pip).
 
 ## Installation
 
@@ -31,27 +31,7 @@ Before running the script, ensure you have the following installed:
    pip install ./aws-development-tools/iot/tunnel
    ```
 
-2. Make the script executable (if needed):
-
-   ```bash
-   chmod +x aws_iot_tunnel.py
-   ```
-
 ## Usage
-
-To use the script, you need to provide the Thing name, and optionally specify the port, profile, region and flag to remove ssh fingerprint.
-
-```bash
-aws-iot-tunnel --thing-name <thing_name> [--port <port>] [--profile <aws_profile>] [--region <region>] [--remove-fingerprint]
-```
-
-OR
-
-```bash
-./aws_iot_tunnel.py --thing-name <thing_name> [--port <port>] [--profile <aws_profile>] [--region <region>] [--remove-fingerprint]
-```
-
-### Example
 
 ```bash
 aws-iot-tunnel -t MyIoTThing -p myawsprofile -r us-west-2

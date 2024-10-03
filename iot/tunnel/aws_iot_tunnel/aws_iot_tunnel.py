@@ -3,11 +3,11 @@
 """
 ===============================================================================
 Script Name: aws_iot_tunnel.py
-Description: Sets up and manages a secure tunnel to an AWS IoT device.
+Description: This script sets up and manages a secure tunnel to an AWS IoT device.
 Usage: ./aws_iot_tunnel.py --thing-name <thing_name> [--port <port>] [--profile <aws_profile>] [--region <region>] [--remove-fingerprint]
 Requirements:
-  - boto3
-  - docker
+  - boto3: AWS SDK for Python
+  - docker: Docker SDK for running containers
   - Python 3.x
 ===============================================================================
 """
@@ -28,14 +28,23 @@ DEFAULT_PORT = 5555  # Default port for Docker
 
 
 def parse_arguments() -> argparse.Namespace:
-    """Parse and return command-line arguments."""
+    """
+    Parse and return command-line arguments.
+
+    Returns:
+        argparse.Namespace: Parsed command-line arguments with keys:
+            - thing_name: AWS IoT Thing name
+            - profile: AWS CLI profile to use (optional)
+            - region: AWS region to use (optional)
+            - port: Port to bind (default: 5555)
+            - remove_fingerprint: Boolean flag to remove SSH fingerprint
+    """
     parser = argparse.ArgumentParser(description="Sets up and manages a secure tunnel to an AWS IoT device.")
 
     parser.add_argument("-t", "--thing-name", type=str, required=True, help="AWS IoT Thing name")
     parser.add_argument("-p", "--profile", type=str, help="AWS profile to use")
     parser.add_argument("-r", "--region", type=str, help="AWS region to use")
     parser.add_argument("-P", "--port", type=int, default=DEFAULT_PORT, help="Port to bind")
-
     parser.add_argument("-R", "--remove-fingerprint", action="store_true", help="Remove SSH fingerprint")
 
     args = parser.parse_args()
@@ -44,8 +53,13 @@ def parse_arguments() -> argparse.Namespace:
 
 def configure_environment() -> str:
     """
-    Configure system settings based on architecture.
-    Returns the appropriate Docker image based on system architecture.
+    Configure system settings based on the machine's architecture.
+
+    Returns:
+        str: Docker image appropriate for the system's architecture.
+
+    Raises:
+        SystemExit: If the architecture is unsupported.
     """
     architecture_to_image = {
         "x86_64": "public.ecr.aws/aws-iot-securetunneling-localproxy/ubuntu-bin:amd64-latest",
@@ -65,7 +79,23 @@ def configure_environment() -> str:
 
 
 class SecureTunnel:
+    """
+    A class that manages an AWS IoT secure tunneling session for a specified IoT Thing.
+    """
+
     def __init__(self, thing_name: str, port: int, profile: Optional[str] = None, region: Optional[str] = None) -> None:
+        """
+        Initialize the SecureTunnel class with IoT Thing name, AWS profile, and region.
+
+        Args:
+            thing_name (str): The name of the IoT Thing.
+            port (int): Port number to be used.
+            profile (Optional[str]): AWS CLI profile name (optional).
+            region (Optional[str]): AWS region (optional).
+
+        Raises:
+            SystemExit: If an error occurs during AWS session initialization.
+        """
         self.thing_name = thing_name
         self.port = port
 
@@ -78,8 +108,13 @@ class SecureTunnel:
 
     def _get_existing_tunnel_id(self) -> Optional[str]:
         """
-        Retrieve the first existing OPEN tunnel ID for the specified IoT Thing.
-        Returns the tunnel ID if found, else None.
+        Retrieve the first existing open tunnel ID for the specified IoT Thing.
+
+        Returns:
+            Optional[str]: The tunnel ID if an open tunnel is found, otherwise None.
+
+        Raises:
+            SystemExit: If an error occurs during tunnel retrieval.
         """
         try:
             response = self.client.list_tunnels(thingName=self.thing_name)
@@ -88,12 +123,24 @@ class SecureTunnel:
                 if tunnel.get("status") == "OPEN":
                     return tunnel.get("tunnelId")
         except Exception as e:
-            print(f"Error: Failed to get existing tunnel id. {e}", file=sys.stderr)
+            print(f"Error: Failed to get existing tunnel ID. {e}", file=sys.stderr)
             sys.exit(1)
 
         return None
 
     def _get_access_token_client_mode(self, tunnel_id: str) -> Literal["ALL", "SOURCE"]:
+        """
+        Determine the client mode for the access token based on the destination connection state.
+
+        Args:
+            tunnel_id (str): The tunnel ID to describe.
+
+        Returns:
+            Literal["ALL", "SOURCE"]: The client mode for the access token.
+
+        Raises:
+            SystemExit: If an error occurs while retrieving the tunnel description.
+        """
         try:
             response = self.client.describe_tunnel(tunnelId=tunnel_id)
             destination_connection_state = (
@@ -108,8 +155,17 @@ class SecureTunnel:
 
     def _rotate_access_tokens(self, tunnel_id: str, client_mode: Literal["ALL", "SOURCE"]) -> dict:
         """
-        Rotate the access tokens for an existing tunnel.
-        Returns the response.
+        Rotate access tokens for an existing tunnel.
+
+        Args:
+            tunnel_id (str): The ID of the tunnel for which to rotate tokens.
+            client_mode (Literal["ALL", "SOURCE"]): The client mode to use for token rotation.
+
+        Returns:
+            dict: The response from the token rotation.
+
+        Raises:
+            SystemExit: If an error occurs during token rotation.
         """
         try:
             kwargs: Dict[str, Union[str, object]] = {"tunnelId": tunnel_id, "clientMode": client_mode}
@@ -132,8 +188,13 @@ class SecureTunnel:
 
     def _open_new_tunnel(self) -> dict:
         """
-        Open a new tunnel for the specified IoT Thing.
-        Returns the response.
+        Open a new secure tunnel for the specified IoT Thing.
+
+        Returns:
+            dict: The response containing the tunnel details.
+
+        Raises:
+            SystemExit: If an error occurs while opening the tunnel.
         """
         try:
             response = self.client.open_tunnel(
@@ -151,8 +212,13 @@ class SecureTunnel:
 
     def get_token(self) -> str:
         """
-        Manage the tunnel by retrieving an existing one or creating a new one.
-        Returns the source access token.
+        Retrieve the access token for the tunnel, either by finding an existing tunnel or creating a new one.
+
+        Returns:
+            str: The source access token for the tunnel.
+
+        Raises:
+            SystemExit: If no valid access token is retrieved.
         """
         existing_tunnel_id = self._get_existing_tunnel_id()
 
@@ -167,7 +233,6 @@ class SecureTunnel:
 
         source_access_token = response.get("sourceAccessToken")
 
-        # Validate source access token
         if not source_access_token or source_access_token.lower() == "null":
             print("Error: Failed to retrieve source access token.", file=sys.stderr)
             sys.exit(1)
@@ -186,6 +251,9 @@ def delete_ssh_fingerprint(hostname: str, port: int):
 
     Returns:
         None
+
+    Raises:
+        SystemExit: If the fingerprint cannot be deleted.
     """
     try:
         host_with_port = f"[{hostname}]:{port}"
@@ -197,13 +265,25 @@ def delete_ssh_fingerprint(hostname: str, port: int):
 
 def run_docker_container(region_name: str, docker_image: str, thing_name: str, source_access_token: str, port: int):
     """
-    Run the Docker container for the tunnel using the Docker SDK.
-    Stops the container if it's already running before starting a new one.
+    Run a Docker container for the secure tunnel using the Docker SDK.
+
+    Args:
+        region_name (str): The AWS region.
+        docker_image (str): The Docker image to use based on system architecture.
+        thing_name (str): The IoT Thing name (also used as the Docker container name).
+        source_access_token (str): The source access token for the tunnel.
+        port (int): The port to expose for the secure tunnel.
+
+    Returns:
+        None
+
+    Raises:
+        SystemExit: If an error occurs while running or stopping the Docker container.
     """
     client = docker.from_env()
 
-    # Check if the container is already running
     try:
+        # Check if the container is already running
         existing_container = client.containers.list(filters={"name": thing_name})
         if existing_container:
             print(f"Container '{thing_name}' is already running. Stopping the container...")
@@ -233,7 +313,7 @@ def run_docker_container(region_name: str, docker_image: str, thing_name: str, s
 
 
 def main():
-    """Main execution flow."""
+    """Main execution flow: Parse arguments, configure environment, manage tunnel, and start Docker container."""
     args = parse_arguments()
     docker_image = configure_environment()
 
