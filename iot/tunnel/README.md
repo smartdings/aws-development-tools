@@ -24,7 +24,13 @@ Before running the script, ensure you have the following installed:
 
 ## Installation
 
-1. Clone this repository or download the script directly:
+Download the script directly or clone this repository:
+
+   ```bash
+   pip install -i https://test.pypi.org/simple/ aws-iot-tunnel
+   ```
+
+OR
 
    ```bash
    git clone https://github.com/smartdings/aws-development-tools.git
@@ -33,9 +39,17 @@ Before running the script, ensure you have the following installed:
 
 ## Usage
 
-```bash
-aws-iot-tunnel -t MyIoTThing -p myawsprofile -r us-west-2
-```
+1. Run the docker container.
+
+   ```bash
+   aws-iot-tunnel -t MyIoTThing -p myawsprofile -r us-west-2
+   ```
+
+2. Connect to the iot thing using SSH.
+
+   ```bash
+   ssh user@localhost -p 5555
+   ```
 
 ## Command-Line Arguments
 
