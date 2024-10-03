@@ -18,8 +18,9 @@ The `aws_iot_tunnel.py` script sets up and manages a secure tunnel to an AWS IoT
 Before running the script, ensure you have the following installed:
 
 - **Python 3.x**
-- **AWS CLI**: Configure your AWS credentials and default region.
 - **Docker**: Required to run the tunnel in a container.
+- **boto3 (AWS SDK)**: To manage secure tunneling (automatically installed with pip).
+- **docker (python SDK)**: To manage docker container (automatically installed with pip).
 
 ## Installation
 
@@ -38,36 +39,37 @@ Before running the script, ensure you have the following installed:
 
 ## Usage
 
-To use the script, you need to provide your AWS profile, the Thing name, and optionally specify the region and port.
+To use the script, you need to provide the Thing name, and optionally specify the port, profile, region and flag to remove ssh fingerprint.
 
 ```bash
-aws-iot-tunnel --profile <aws_profile> --thing-name <thing_name> [--region <region>] [--port <port>]
+aws-iot-tunnel --thing-name <thing_name> [--port <port>] [--profile <aws_profile>] [--region <region>] [--remove-fingerprint]
 ```
 
 OR
 
 ```bash
-./aws_iot_tunnel.py --profile <aws_profile> --thing-name <thing_name> [--region <region>] [--port <port>]
+./aws_iot_tunnel.py --thing-name <thing_name> [--port <port>] [--profile <aws_profile>] [--region <region>] [--remove-fingerprint]
 ```
 
 ### Example
 
 ```bash
-aws-iot-tunnel --profile myawsprofile --thing-name MyIoTThing --region us-west-2
+aws-iot-tunnel -t MyIoTThing -p myawsprofile -r us-west-2
 ```
 
 ## Command-Line Arguments
 
-| Argument          | Short Form | Type   | Required | Description                                            |
-|-------------------|------------|--------|----------|--------------------------------------------------------|
-| `--profile`       | `-p`       | string | Yes      | AWS profile to use for authentication.                 |
-| `--thing-name`    | `-t`       | string | Yes      | Name of the AWS IoT Thing to connect to.               |
-| `--region`        | `-r`       | string | No       | AWS region to use (defaults to the configured region). |
-| `--port`          | `-P`       | int    | No       | Port to bind (defaults to `5555`).                     |
+| Argument               | Short Form | Type   | Required | Description                                             |
+|------------------------|------------|--------|----------|---------------------------------------------------------|
+| `--thing-name`         | `-t`       | string | Yes      | Name of the AWS IoT Thing to connect to.                |
+| `--port`               | `-P`       | int    | No       | Port to bind (defaults to `5555`).                      |
+| `--profile`            | `-p`       | string | No       | AWS profile to use for authentication.                  |
+| `--region`             | `-r`       | string | No       | AWS region to use (defaults to the configured region).  |
+| `--remove-fingerprint` | `-R`       |        | No       | Remove SSH fingerprint on localhost with specified port.|
 
 ## How It Works
 
-1. **AWS CLI Commands**: The script interacts with the AWS IoT Secure Tunneling service using AWS CLI commands to manage tunnels and rotate access tokens.
+1. **boto3 SDK**: The script interacts with the AWS IoT Secure Tunneling service using boto3 SDK to manage tunnels and rotate access tokens.
 2. **Docker Integration**: It runs a Docker container configured for the appropriate architecture to establish a secure tunnel to the specified IoT device.
 3. **Token Management**: The script checks for existing tunnels and manages the source access tokens required for secure communication.
 
