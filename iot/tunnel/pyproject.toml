@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aws-iot-tunnel"
-version = "0.3"
+version = "0.4"
 description = "A script to set up and manage a secure tunnel to an AWS IoT device"
 readme = { file = "README.md", content-type = "text/markdown" }  # Updated format
 authors = [
