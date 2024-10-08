@@ -13,6 +13,7 @@ Requirements:
 """
 
 import argparse
+import time
 import boto3
 import docker
 import docker.errors
@@ -348,11 +349,13 @@ def run_docker_container(region_name: str, docker_image: str, thing_name: str, s
 
     try:
         # Check if the container is already running
-        existing_container = client.containers.list(filters={"name": thing_name})
-        if existing_container:
+        existing_containers = client.containers.list(filters={"name": thing_name})
+        if existing_containers:
             print(f"Container '{thing_name}' is already running. Stopping the container...")
-            existing_container[0].stop()
-            existing_container[0].wait()
+            existing_container = existing_containers[0]
+            existing_container.stop()
+            existing_container.wait()  # Wait for the container to stop
+            time.sleep(1)  # wait before starting new container
             print(f"Container '{thing_name}' stopped successfully.")
     except docker.errors.DockerException as e:
         print(f"Error checking or stopping container: {e}", file=sys.stderr)
