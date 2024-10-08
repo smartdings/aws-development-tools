@@ -17,10 +17,11 @@ The `aws_iot_tunnel.py` script sets up and manages a secure tunnel to an AWS IoT
 
 Before running the script, ensure you have the following installed:
 
-- **Python 3.x**
-- **Docker**: Required to run the tunnel in a container.
-- **boto3 (AWS SDK)**: To manage secure tunneling (automatically installed with pip).
-- **docker (Docker SDK)**: To manage docker container (automatically installed with pip).
+- **[Python 3.x](https://www.python.org/downloads/)**
+- **[AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html) ([Configured](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-quickstart.html))**
+- **[Docker](https://www.docker.com/get-started/)**: Required to run the tunnel in a container.
+- **[boto3](https://pypi.org/project/boto3/) (AWS SDK)**: To manage secure tunneling (automatically installed with pip).
+- **[docker](https://pypi.org/project/docker/) (Docker SDK)**: To manage docker container (automatically installed with pip).
 
 ## Installation
 
