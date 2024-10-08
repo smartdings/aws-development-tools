@@ -51,12 +51,15 @@ def parse_arguments() -> argparse.Namespace:
     return args
 
 
-def configure_environment() -> str:
+def get_docker_image(architecture: str) -> str:
     """
-    Configure system settings based on the machine's architecture.
+    Get the Docker image corresponding to the detected architecture.
+
+    Args:
+        architecture (str): The detected architecture.
 
     Returns:
-        str: Docker image appropriate for the system's architecture.
+        str: Docker image URL.
 
     Raises:
         SystemExit: If the architecture is unsupported.
@@ -67,15 +70,76 @@ def configure_environment() -> str:
         "armv7l": "public.ecr.aws/aws-iot-securetunneling-localproxy/ubuntu-bin:armv7-latest",
     }
 
-    architecture = platform.machine()
     docker_image = architecture_to_image.get(architecture)
-
     if not docker_image:
         print(f"Error: Unsupported architecture '{architecture}'.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Configured Docker image for architecture: {architecture}")
     return docker_image
+
+
+def normalize_windows_architecture(architecture: str) -> str:
+    """
+    Normalize architecture string for Windows compatibility.
+
+    Args:
+        architecture (str): The detected architecture.
+
+    Returns:
+        str: Normalized architecture.
+    """
+    if architecture == "AMD64":
+        return "x86_64"
+    elif architecture in ["aarch64", "arm64"]:
+        return "arm64"
+    return architecture
+
+
+def detect_unix_architecture() -> str:
+    """
+    Detect architecture using the 'uname' command on Unix-like systems.
+
+    Returns:
+        str: Detected architecture.
+
+    Raises:
+        SystemExit: If architecture detection fails.
+    """
+    try:
+        architecture = subprocess.check_output(["uname", "-m"]).decode().strip()
+        if architecture == "x86_64":
+            return "x86_64"
+        elif architecture in ["aarch64", "arm64"]:
+            return "arm64"
+        elif architecture == "armv7l":
+            return "armv7l"
+    except Exception as e:
+        print(f"Error detecting architecture using uname: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    return "unknown"  # Fallback if no architecture is detected
+
+
+def detect_architecture() -> str:
+    """
+    Detect the system architecture and return the appropriate Docker image.
+
+    Returns:
+        str: Docker image appropriate for the system's architecture.
+    """
+    architecture = platform.machine()
+    architecture = normalize_windows_architecture(architecture)
+
+    # Check if detected architecture is already supported
+    if architecture in ["x86_64", "arm64", "armv7l"]:
+        print(f"Configured Docker image for architecture: {architecture}")
+        return get_docker_image(architecture)
+
+    # Fallback to uname command for Unix-like systems
+    architecture = detect_unix_architecture()
+
+    # Final check for supported architectures
+    return get_docker_image(architecture)
 
 
 class SecureTunnel:
@@ -315,7 +379,7 @@ def run_docker_container(region_name: str, docker_image: str, thing_name: str, s
 def main():
     """Main execution flow: Parse arguments, configure environment, manage tunnel, and start Docker container."""
     args = parse_arguments()
-    docker_image = configure_environment()
+    docker_image = detect_architecture()
 
     secure_tunnel = SecureTunnel(args.thing_name, args.port, args.profile, args.region)
     source_access_token = secure_tunnel.get_token()
