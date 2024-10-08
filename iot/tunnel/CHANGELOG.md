@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.8] - 2024-10-08
+
+- fixed existing container not found exception.
+- Improved README.md.
+
 ## [0.7] - 2024-10-08
 
 - fixed unable to start new container after stopping existing container.
