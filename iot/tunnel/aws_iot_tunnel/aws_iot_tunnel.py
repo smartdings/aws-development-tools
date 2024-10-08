@@ -357,6 +357,9 @@ def run_docker_container(region_name: str, docker_image: str, thing_name: str, s
             existing_container.wait()  # Wait for the container to stop
             time.sleep(1)  # wait before starting new container
             print(f"Container '{thing_name}' stopped successfully.")
+    except docker.errors.NotFound:
+        # Skip if the container is not found (404 error)
+        print(f"Container '{thing_name}' not found. Skipping stop process.")
     except docker.errors.DockerException as e:
         print(f"Error checking or stopping container: {e}", file=sys.stderr)
         sys.exit(1)
