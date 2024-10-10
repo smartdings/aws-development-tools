@@ -328,6 +328,24 @@ def delete_ssh_fingerprint(hostname: str, port: int):
         print(f"Error deleting fingerprint: {e}", file=sys.stderr)
 
 
+def docker_pre_check():
+    """
+    Verifies if Docker is running. Returns a Docker client if successful,
+    or exits with an error if not.
+
+    Returns:
+        docker.client.DockerClient: Docker client if daemon is accessible.
+
+    """
+    try:
+        client = docker.from_env()
+        client.ping()
+        return client
+    except docker.errors.DockerException:
+        print("Docker is not running or can't connect to the daemon.", file=sys.stderr)
+        sys.exit(1)
+
+
 def run_docker_container(region_name: str, docker_image: str, thing_name: str, source_access_token: str, port: int):
     """
     Run a Docker container for the secure tunnel using the Docker SDK.
@@ -345,7 +363,8 @@ def run_docker_container(region_name: str, docker_image: str, thing_name: str, s
     Raises:
         SystemExit: If an error occurs while running or stopping the Docker container.
     """
-    client = docker.from_env()
+
+    client = docker_pre_check()
 
     try:
         # Check if the container is already running
@@ -385,6 +404,7 @@ def run_docker_container(region_name: str, docker_image: str, thing_name: str, s
 def main():
     """Main execution flow: Parse arguments, configure environment, manage tunnel, and start Docker container."""
     args = parse_arguments()
+    docker_pre_check()
     docker_image = detect_architecture()
 
     secure_tunnel = SecureTunnel(args.thing_name, args.port, args.profile, args.region)
