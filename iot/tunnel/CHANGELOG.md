@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.9] - 2024-10-10
+
+- handle docker daemon not running exception gracefully.
+
 ## [0.8] - 2024-10-08
 
 - fixed existing container not found exception.
