@@ -20,8 +20,18 @@ Contributions are welcome! If you would like to add a new tool, enhance existing
 
 This repository is licensed under the [Apache License 2.0](LICENSE).
 
+## Code of Conduct
+
+We expect all contributors to adhere to our [Code of Conduct](CODE_OF_CONDUCT.md) to ensure a welcoming and respectful environment for everyone.
+
+## Security Policy
+
+For details on reporting security vulnerabilities, please see our [Security Policy](SECURITY.md).
+
 ### Key Points Covered
 
 - **Overview**: A brief introduction to the purpose of the repository.
 - **Contributing**: Encouraging contributions and collaboration.
 - **License**: Including licensing information.
+- **Code of Conduct**: Welcoming and respectful environment for everyone.
+- **Security Policy**: Reporting security vulnerabilities.
