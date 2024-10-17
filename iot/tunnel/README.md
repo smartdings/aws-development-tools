@@ -28,7 +28,7 @@ Before running the script, ensure you have the following installed:
 Download the script directly or clone this repository:
 
    ```bash
-   pip install -i https://test.pypi.org/simple/ aws-iot-tunnel
+   pip install aws-iot-tunnel
    ```
 
 OR
