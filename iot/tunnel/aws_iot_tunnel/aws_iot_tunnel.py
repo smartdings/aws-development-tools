@@ -4,7 +4,7 @@
 ===============================================================================
 Script Name: aws_iot_tunnel.py
 Description: This script sets up and manages a secure tunnel to an AWS IoT device.
-Usage: ./aws_iot_tunnel.py --thing-name <thing_name> [--port <port>] [--profile <aws_profile>] [--region <region>] [--remove-fingerprint] [--new-tunnel]
+Usage: ./aws_iot_tunnel.py --thing-name <thing_name> [--port <port>] [--profile <aws_profile>] [--region <region>] [--remove-fingerprint] [--new-tunnel] [--v2]
 Requirements:
   - boto3: AWS SDK for Python
   - docker: Docker SDK for running containers
@@ -27,6 +27,7 @@ from typing import Dict, Literal, Optional, Union
 DEFAULT_SERVICE = "SSH"  # Service type for the tunnel
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 5555  # Default port for Docker
+DEFAULT_CLIENT_TYPE = "V1"  # Local-proxy protocol version; V2 supports multiple simultaneous sessions per tunnel but requires a V2-capable local proxy on the destination device
 
 # Docker labels used to identify which thing/tunnel a container belongs to,
 # independent of the container's (human-readable, but not authoritative) name.
@@ -46,6 +47,7 @@ def parse_arguments() -> argparse.Namespace:
             - port: Port to bind (default: 5555)
             - remove_fingerprint: Boolean flag to remove SSH fingerprint
             - new_tunnel: Boolean flag to force opening a new tunnel instead of reusing an existing one
+            - v2: Boolean flag to use the V2 local-proxy protocol instead of the V1 default
     """
     parser = argparse.ArgumentParser(description="Sets up and manages a secure tunnel to an AWS IoT device.")
 
@@ -59,6 +61,13 @@ def parse_arguments() -> argparse.Namespace:
         "--new-tunnel",
         action="store_true",
         help="Force opening a new tunnel instead of reusing an existing open tunnel",
+    )
+    parser.add_argument(
+        "-V",
+        "--v2",
+        action="store_true",
+        help="Use the V2 local-proxy protocol instead of the V1 default. V2 supports multiple simultaneous "
+        "sessions per tunnel, but requires the destination device's local proxy to also support V2.",
     )
 
     args = parser.parse_args()
@@ -427,10 +436,10 @@ def container_name_for(thing_name: str, tunnel_id: str) -> str:
     different tunnels to the same thing (e.g. after `--new-tunnel`) never
     collide on the container name even if they happen to reuse a port over
     time. The port isn't part of the name: `docker ps` already shows each
-    container's port mapping, and a given tunnel only ever supports one
-    active local-proxy session at a time regardless of port (see
-    `run_docker_container`), so the tunnel ID alone is a sufficient and more
-    meaningful identity than tunnel+port would be.
+    container's port mapping, and this script only ever runs one local-proxy
+    container per tunnel regardless of port (see `run_docker_container`), so
+    the tunnel ID alone is a sufficient and more meaningful identity than
+    tunnel+port would be.
 
     Args:
         thing_name (str): The IoT Thing name.
@@ -522,16 +531,24 @@ def resolve_container_conflict(container, description: str) -> None:
         sys.exit(1)
 
 
-def run_docker_container(region_name: str, docker_image: str, thing_name: str, source_access_token: str, port: int, tunnel_id: str):
+def run_docker_container(
+    region_name: str,
+    docker_image: str,
+    thing_name: str,
+    source_access_token: str,
+    port: int,
+    tunnel_id: str,
+    use_v2: bool = False,
+):
     """
     Run a Docker container for the secure tunnel using the Docker SDK.
 
     Two independent conflicts are checked before starting: another container
     already bound to the requested host port (an OS-level constraint, and may
     belong to any thing/tunnel), and this exact tunnel already having a running
-    container regardless of port (an AWS IoT Secure Tunneling constraint — a
-    tunnel supports only one active local-proxy session at a time). Either one
-    prompts to stop the conflicting container, defaulting to "no".
+    container regardless of port (this script only ever runs one local-proxy
+    process per tunnel). Either one prompts to stop the conflicting container,
+    defaulting to "no".
 
     Args:
         region_name (str): The AWS region.
@@ -540,6 +557,7 @@ def run_docker_container(region_name: str, docker_image: str, thing_name: str, s
         source_access_token (str): The source access token for the tunnel.
         port (int): The port to expose for the secure tunnel.
         tunnel_id (str): The AWS IoT tunnel ID the container proxies.
+        use_v2 (bool): If True, run the local proxy with the V2 destination client type instead of V1.
 
     Returns:
         None
@@ -548,6 +566,8 @@ def run_docker_container(region_name: str, docker_image: str, thing_name: str, s
         SystemExit: If an error occurs while running or stopping the Docker container,
             or if the user chooses not to stop a conflicting container.
     """
+
+    client_type: Literal["V1", "V2"] = "V2" if use_v2 else DEFAULT_CLIENT_TYPE
 
     client = docker_pre_check()
     container_name = container_name_for(thing_name, tunnel_id)
@@ -564,7 +584,7 @@ def run_docker_container(region_name: str, docker_image: str, thing_name: str, s
             f"Port {port} is already in use by container '{port_conflict.name}' (tunnel '{existing_tunnel_id}'), for {relation}.",
         )
 
-    # A tunnel supports only one active local-proxy session at a time, so if this
+    # This script only ever runs one local-proxy container per tunnel, so if this
     # exact tunnel already has a container - even bound to a different port than
     # requested - starting a second one would knock the first offline. Looking it
     # up by container_name also naturally catches (and quietly cleans up) a
@@ -582,7 +602,7 @@ def run_docker_container(region_name: str, docker_image: str, thing_name: str, s
         resolve_container_conflict(
             tunnel_container,
             f"Tunnel '{tunnel_id}' for thing '{thing_name}' already has a running container '{tunnel_container.name}'. "
-            "A tunnel supports only one active local session at a time.",
+            "This script only runs one local-proxy container per tunnel.",
         )
     elif tunnel_container:
         # Best-effort cleanup: the container isn't running, so it can't be an
@@ -609,7 +629,7 @@ def run_docker_container(region_name: str, docker_image: str, thing_name: str, s
             labels={LABEL_THING_NAME: thing_name, LABEL_TUNNEL_ID: tunnel_id},
             detach=True,
             remove=True,  # Automatically removes the container when it stops
-            command=f"--region {region_name} -b {DEFAULT_HOST} -s {port} -c /etc/ssl/certs --destination-client-type V1",
+            command=f"--region {region_name} -b {DEFAULT_HOST} -s {port} -c /etc/ssl/certs --destination-client-type {client_type}",
         )
         print(f"Docker container '{container_name}' started successfully on port {port}.")
     except docker.errors.DockerException as e:
@@ -627,7 +647,7 @@ def main():
     source_access_token, tunnel_id = secure_tunnel.get_token(force_new=args.new_tunnel)
     region_name = secure_tunnel.session.region_name
 
-    run_docker_container(region_name, docker_image, args.thing_name, source_access_token, args.port, tunnel_id)  # type: ignore
+    run_docker_container(region_name, docker_image, args.thing_name, source_access_token, args.port, tunnel_id, args.v2)  # type: ignore
 
     if args.remove_fingerprint:
         delete_ssh_fingerprint("localhost", args.port)

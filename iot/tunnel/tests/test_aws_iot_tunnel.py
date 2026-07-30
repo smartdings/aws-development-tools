@@ -31,6 +31,7 @@ class TestParseArguments:
         assert args.port == tunnel.DEFAULT_PORT
         assert args.remove_fingerprint is False
         assert args.new_tunnel is False
+        assert args.v2 is False
 
     def test_all_options_long_form(self, monkeypatch):
         monkeypatch.setattr(
@@ -48,6 +49,7 @@ class TestParseArguments:
                 "6666",
                 "--remove-fingerprint",
                 "--new-tunnel",
+                "--v2",
             ],
         )
         args = tunnel.parse_arguments()
@@ -58,24 +60,35 @@ class TestParseArguments:
         assert args.port == 6666
         assert args.remove_fingerprint is True
         assert args.new_tunnel is True
+        assert args.v2 is True
 
     def test_all_options_short_form(self, monkeypatch):
         monkeypatch.setattr(
             sys,
             "argv",
-            ["aws-iot-tunnel", "-t", "MyThing", "-p", "myprofile", "-r", "us-west-2", "-P", "7777", "-R", "-N"],
+            ["aws-iot-tunnel", "-t", "MyThing", "-p", "myprofile", "-r", "us-west-2", "-P", "7777", "-R", "-N", "-V"],
         )
         args = tunnel.parse_arguments()
 
         assert args.port == 7777
         assert args.remove_fingerprint is True
         assert args.new_tunnel is True
+        assert args.v2 is True
 
     def test_missing_required_thing_name_exits(self, monkeypatch, capsys):
         monkeypatch.setattr(sys, "argv", ["aws-iot-tunnel"])
 
         with pytest.raises(SystemExit):
             tunnel.parse_arguments()
+
+    def test_negative_port_still_parses(self, monkeypatch):
+        # Regression test: a short option string that looks like a negative number
+        # (e.g. "-2") makes argparse treat every "-<digits>" token as an option
+        # rather than a value, breaking "-P -1". Guards against reintroducing that.
+        monkeypatch.setattr(sys, "argv", ["aws-iot-tunnel", "-t", "MyThing", "-P", "-1"])
+        args = tunnel.parse_arguments()
+
+        assert args.port == -1
 
 
 # ---------------------------------------------------------------------------
@@ -643,6 +656,19 @@ class TestRunDockerContainer:
         assert kwargs["detach"] is True
         assert kwargs["remove"] is True
         assert "--region us-west-2" in kwargs["command"]
+        assert "--destination-client-type V1" in kwargs["command"]
+
+    def test_client_type_defaults_to_v1(self, mock_docker_client):
+        tunnel.run_docker_container("us-west-2", "some-image", "MyThing", "tok", 5555, "t-1")
+
+        _, kwargs = mock_docker_client.containers.run.call_args
+        assert "--destination-client-type V1" in kwargs["command"]
+
+    def test_use_v2_switches_client_type_to_v2(self, mock_docker_client):
+        tunnel.run_docker_container("us-west-2", "some-image", "MyThing", "tok", 5555, "t-1", use_v2=True)
+
+        _, kwargs = mock_docker_client.containers.run.call_args
+        assert "--destination-client-type V2" in kwargs["command"]
 
     def test_port_conflict_prompts_resolution(self, mock_docker_client, monkeypatch):
         conflicting_container = MagicMock()
@@ -733,7 +759,9 @@ class TestRunDockerContainer:
 class TestMain:
     @pytest.fixture
     def wired_main(self, monkeypatch):
-        args = MagicMock(thing_name="MyThing", profile=None, region=None, port=5555, remove_fingerprint=False, new_tunnel=False)
+        args = MagicMock(
+            thing_name="MyThing", profile=None, region=None, port=5555, remove_fingerprint=False, new_tunnel=False, v2=False
+        )
         monkeypatch.setattr(tunnel, "parse_arguments", MagicMock(return_value=args))
         monkeypatch.setattr(tunnel, "docker_pre_check", MagicMock())
         monkeypatch.setattr(tunnel, "detect_architecture", MagicMock(return_value="some-image"))
@@ -759,7 +787,7 @@ class TestMain:
 
         secure_tunnel_class_mock.assert_called_once_with(args.thing_name, args.port, args.profile, args.region)
         mock_secure_tunnel.get_token.assert_called_once_with(force_new=False)
-        run_container_mock.assert_called_once_with("us-west-2", "some-image", "MyThing", "tok", 5555, "t-1")
+        run_container_mock.assert_called_once_with("us-west-2", "some-image", "MyThing", "tok", 5555, "t-1", False)
         delete_fingerprint_mock.assert_not_called()
 
     def test_remove_fingerprint_flag_deletes_fingerprint(self, wired_main):
@@ -777,3 +805,11 @@ class TestMain:
         tunnel.main()
 
         mock_secure_tunnel.get_token.assert_called_once_with(force_new=True)
+
+    def test_v2_flag_selects_v2_client_type(self, wired_main):
+        args, secure_tunnel_class_mock, mock_secure_tunnel, run_container_mock, delete_fingerprint_mock = wired_main
+        args.v2 = True
+
+        tunnel.main()
+
+        run_container_mock.assert_called_once_with("us-west-2", "some-image", "MyThing", "tok", 5555, "t-1", True)

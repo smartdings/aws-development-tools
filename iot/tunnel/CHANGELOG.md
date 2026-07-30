@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.12] - 2026-07-30
+
+- Added `--v2`/`-V` to run the local proxy with `--destination-client-type V2` instead of the V1 default, letting a single tunnel carry multiple simultaneous sessions (e.g. more than one SSH connection through the same tunnel at once) — only use it if the destination device's local proxy also supports V2, otherwise the tunnel connects but silently drops data due to mismatched framing.
+
 ## [0.11] - 2026-07-30
 
 - Docker containers are now named and labeled after the thing name and the tunnel ID they're proxying (e.g. `MyIoTThing-<tunnel-id>`), so `docker ps`/`docker inspect` show exactly which AWS IoT tunnel each container belongs to. The port isn't part of the identity: `docker ps` already shows each container's port mapping, and an AWS IoT tunnel only ever supports one active local-proxy session at a time regardless of port.
