@@ -28,6 +28,11 @@ DEFAULT_SERVICE = "SSH"  # Service type for the tunnel
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 5555  # Default port for Docker
 
+# Docker labels used to identify which thing/tunnel a container belongs to,
+# independent of the container's (human-readable, but not authoritative) name.
+LABEL_THING_NAME = "aws-iot-tunnel.thing-name"
+LABEL_TUNNEL_ID = "aws-iot-tunnel.tunnel-id"
+
 
 def parse_arguments() -> argparse.Namespace:
     """
@@ -332,7 +337,7 @@ class SecureTunnel:
             print(f"Error: Failed to open new tunnel. {e}", file=sys.stderr)
             sys.exit(1)
 
-    def get_token(self, force_new: bool = False) -> str:
+    def get_token(self, force_new: bool = False) -> "tuple[str, str]":
         """
         Retrieve the access token for the tunnel, either by finding an existing tunnel or creating a new one.
 
@@ -340,7 +345,7 @@ class SecureTunnel:
             force_new (bool): If True, skip reusing an existing open tunnel and always open a new one.
 
         Returns:
-            str: The source access token for the tunnel.
+            tuple[str, str]: The source access token and the ID of the tunnel it belongs to.
 
         Raises:
             SystemExit: If no valid access token is retrieved.
@@ -352,10 +357,16 @@ class SecureTunnel:
             client_mode = self._get_access_token_client_mode(existing_tunnel_id)
             print(f"Rotating access tokens for tunnel ID: {existing_tunnel_id} in client mode {client_mode}")
             response = self._rotate_access_tokens(existing_tunnel_id, client_mode)
+            tunnel_id = existing_tunnel_id
         else:
             reason = "reuse of existing tunnel disabled" if force_new else "no existing tunnel found"
             print(f"Opening a new tunnel ({reason})...")
             response = self._open_new_tunnel()
+            tunnel_id = response.get("tunnelId")
+
+        if not tunnel_id:
+            print("Error: Failed to retrieve tunnel ID.", file=sys.stderr)
+            sys.exit(1)
 
         source_access_token = response.get("sourceAccessToken")
 
@@ -364,7 +375,7 @@ class SecureTunnel:
             sys.exit(1)
 
         print("Source access token obtained successfully.")
-        return source_access_token
+        return source_access_token, tunnel_id
 
 
 def delete_ssh_fingerprint(hostname: str, port: int):
@@ -407,56 +418,200 @@ def docker_pre_check():
         sys.exit(1)
 
 
-def run_docker_container(region_name: str, docker_image: str, thing_name: str, source_access_token: str, port: int):
+def container_name_for(thing_name: str, tunnel_id: str) -> str:
+    """
+    Build the Docker container name for a given thing/tunnel combination.
+
+    Naming includes the tunnel ID (not the port) so that `docker ps` alone
+    shows which AWS IoT tunnel a container is proxying, and so that two
+    different tunnels to the same thing (e.g. after `--new-tunnel`) never
+    collide on the container name even if they happen to reuse a port over
+    time. The port isn't part of the name: `docker ps` already shows each
+    container's port mapping, and a given tunnel only ever supports one
+    active local-proxy session at a time regardless of port (see
+    `run_docker_container`), so the tunnel ID alone is a sufficient and more
+    meaningful identity than tunnel+port would be.
+
+    Args:
+        thing_name (str): The IoT Thing name.
+        tunnel_id (str): The AWS IoT tunnel ID the container proxies.
+
+    Returns:
+        str: The Docker container name.
+    """
+    return f"{thing_name}-{tunnel_id}"
+
+
+def find_container_using_port(client: "docker.client.DockerClient", port: int):
+    """
+    Find a running container that already has the given host TCP port bound.
+
+    Args:
+        client (docker.client.DockerClient): The Docker client.
+        port (int): The host port to check.
+
+    Returns:
+        Optional[docker.models.containers.Container]: The container bound to
+        that port, or None if the port is free.
+
+    Raises:
+        SystemExit: If the Docker daemon can't be queried.
+    """
+    try:
+        # Let the Docker daemon filter by port binding instead of pulling and
+        # inspecting every running container client-side.
+        matches = client.containers.list(filters={"publish": f"{port}/tcp"})
+    except docker.errors.DockerException as e:
+        print(f"Error: Failed to list Docker containers. {e}", file=sys.stderr)
+        sys.exit(1)
+
+    return matches[0] if matches else None
+
+
+def prompt_yes_no(prompt_text: str) -> bool:
+    """
+    Ask a y/N question. Defaults to "no", both when the user just presses enter
+    and when the session isn't interactive.
+
+    Args:
+        prompt_text (str): The prompt to show (used only in interactive sessions).
+
+    Returns:
+        bool: True if the user answered yes, False otherwise.
+    """
+    if not sys.stdin.isatty():
+        print("Non-interactive session detected. Defaulting to 'no'.")
+        return False
+
+    try:
+        choice = input(prompt_text).strip().lower()
+    except EOFError:
+        choice = ""
+
+    return choice in ("y", "yes")
+
+
+def resolve_container_conflict(container, description: str) -> None:
+    """
+    Print `description`, then ask whether to stop the conflicting container.
+    Declining leaves it running and aborts the whole run (SystemExit), since
+    starting a new container can't safely proceed while it's up.
+
+    Args:
+        container (docker.models.containers.Container): The conflicting container.
+        description (str): One-line explanation of why it conflicts, shown to the user.
+
+    Raises:
+        SystemExit: If the user declines to stop the container, or stopping it fails.
+    """
+    print(description)
+    if not prompt_yes_no(f"Stop container '{container.name}' and continue? [y/N]: "):
+        print(f"Leaving container '{container.name}' running. Aborting.", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        print(f"Stopping container '{container.name}'...")
+        container.stop()
+        container.wait()  # Wait for the container to stop
+        time.sleep(1)  # wait before starting new container
+        print(f"Container '{container.name}' stopped successfully.")
+    except docker.errors.NotFound:
+        print(f"Container '{container.name}' was already gone. Skipping stop.")
+    except docker.errors.DockerException as e:
+        print(f"Error stopping container: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def run_docker_container(region_name: str, docker_image: str, thing_name: str, source_access_token: str, port: int, tunnel_id: str):
     """
     Run a Docker container for the secure tunnel using the Docker SDK.
+
+    Two independent conflicts are checked before starting: another container
+    already bound to the requested host port (an OS-level constraint, and may
+    belong to any thing/tunnel), and this exact tunnel already having a running
+    container regardless of port (an AWS IoT Secure Tunneling constraint — a
+    tunnel supports only one active local-proxy session at a time). Either one
+    prompts to stop the conflicting container, defaulting to "no".
 
     Args:
         region_name (str): The AWS region.
         docker_image (str): The Docker image to use based on system architecture.
-        thing_name (str): The IoT Thing name (also used as the Docker container name).
+        thing_name (str): The IoT Thing name.
         source_access_token (str): The source access token for the tunnel.
         port (int): The port to expose for the secure tunnel.
+        tunnel_id (str): The AWS IoT tunnel ID the container proxies.
 
     Returns:
         None
 
     Raises:
-        SystemExit: If an error occurs while running or stopping the Docker container.
+        SystemExit: If an error occurs while running or stopping the Docker container,
+            or if the user chooses not to stop a conflicting container.
     """
 
     client = docker_pre_check()
+    container_name = container_name_for(thing_name, tunnel_id)
 
+    port_conflict = find_container_using_port(client, port)
+    if port_conflict:
+        existing_thing_name = port_conflict.labels.get(LABEL_THING_NAME, "unknown")
+        existing_tunnel_id = port_conflict.labels.get(LABEL_TUNNEL_ID, "unknown")
+        relation = (
+            f"the same thing '{thing_name}'" if existing_thing_name == thing_name else f"a different thing (requested: '{thing_name}')"
+        )
+        resolve_container_conflict(
+            port_conflict,
+            f"Port {port} is already in use by container '{port_conflict.name}' (tunnel '{existing_tunnel_id}'), for {relation}.",
+        )
+
+    # A tunnel supports only one active local-proxy session at a time, so if this
+    # exact tunnel already has a container - even bound to a different port than
+    # requested - starting a second one would knock the first offline. Looking it
+    # up by container_name also naturally catches (and quietly cleans up) a
+    # stopped, not-yet-removed leftover from a previous run, including the one
+    # just stopped above if `remove=True` hasn't finished removing it yet.
     try:
-        # Check if the container is already running
-        existing_containers = client.containers.list(filters={"name": thing_name})
-        if existing_containers:
-            print(f"Container '{thing_name}' is already running. Stopping the container...")
-            existing_container = existing_containers[0]
-            existing_container.stop()
-            existing_container.wait()  # Wait for the container to stop
-            time.sleep(1)  # wait before starting new container
-            print(f"Container '{thing_name}' stopped successfully.")
+        tunnel_container = client.containers.get(container_name)
     except docker.errors.NotFound:
-        # Skip if the container is not found (404 error)
-        print(f"Container '{thing_name}' not found. Skipping stop process.")
+        tunnel_container = None
     except docker.errors.DockerException as e:
-        print(f"Error checking or stopping container: {e}", file=sys.stderr)
+        print(f"Error: Failed to inspect existing container '{container_name}'. {e}", file=sys.stderr)
         sys.exit(1)
+
+    if tunnel_container and tunnel_container.status == "running":
+        resolve_container_conflict(
+            tunnel_container,
+            f"Tunnel '{tunnel_id}' for thing '{thing_name}' already has a running container '{tunnel_container.name}'. "
+            "A tunnel supports only one active local session at a time.",
+        )
+    elif tunnel_container:
+        # Best-effort cleanup: the container isn't running, so it can't be an
+        # active conflict. If it's stuck mid-removal (e.g. Docker is still
+        # finishing the `remove=True` auto-cleanup from a container we just
+        # stopped above), don't fail the whole run over it — let `containers.run()`
+        # below sort it out, since it already has its own clear error handling.
+        print(f"Removing stale container '{tunnel_container.name}' left over from a previous run...")
+        try:
+            tunnel_container.remove(force=True)
+        except docker.errors.NotFound:
+            pass
+        except docker.errors.DockerException as e:
+            print(f"Warning: Failed to remove stale container '{tunnel_container.name}'. {e}", file=sys.stderr)
 
     # Run the new Docker container
     try:
-        print(f"Starting Docker container '{thing_name}' with image '{docker_image}'...")
+        print(f"Starting Docker container '{container_name}' with image '{docker_image}'...")
         client.containers.run(
             image=docker_image,
-            name=thing_name,
+            name=container_name,
             environment={"AWSIOT_TUNNEL_ACCESS_TOKEN": source_access_token},
             ports={f"{port}/tcp": port},
+            labels={LABEL_THING_NAME: thing_name, LABEL_TUNNEL_ID: tunnel_id},
             detach=True,
             remove=True,  # Automatically removes the container when it stops
             command=f"--region {region_name} -b {DEFAULT_HOST} -s {port} -c /etc/ssl/certs --destination-client-type V1",
         )
-        print(f"Docker container '{thing_name}' started successfully on port {port}.")
+        print(f"Docker container '{container_name}' started successfully on port {port}.")
     except docker.errors.DockerException as e:
         print(f"Error: Failed to start Docker container: {e}", file=sys.stderr)
         sys.exit(1)
@@ -469,10 +624,10 @@ def main():
     docker_image = detect_architecture()
 
     secure_tunnel = SecureTunnel(args.thing_name, args.port, args.profile, args.region)
-    source_access_token = secure_tunnel.get_token(force_new=args.new_tunnel)
+    source_access_token, tunnel_id = secure_tunnel.get_token(force_new=args.new_tunnel)
     region_name = secure_tunnel.session.region_name
 
-    run_docker_container(region_name, docker_image, args.thing_name, source_access_token, args.port)  # type: ignore
+    run_docker_container(region_name, docker_image, args.thing_name, source_access_token, args.port, tunnel_id)  # type: ignore
 
     if args.remove_fingerprint:
         delete_ssh_fingerprint("localhost", args.port)

@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.11] - 2026-07-30
+
+- Docker containers are now named and labeled after the thing name and the tunnel ID they're proxying (e.g. `MyIoTThing-<tunnel-id>`), so `docker ps`/`docker inspect` show exactly which AWS IoT tunnel each container belongs to. The port isn't part of the identity: `docker ps` already shows each container's port mapping, and an AWS IoT tunnel only ever supports one active local-proxy session at a time regardless of port.
+- Replaced the auto-close/error behavior for a busy resource with a single prompt, defaulting to "no": if the requested host port is already bound by another container, or this exact tunnel already has a running container on a different port, the script prints who's holding it and asks whether to stop it. Declining leaves the existing container running and exits without starting a new one. A stopped, not-yet-removed leftover from a previous run is still cleaned up silently. Two different tunnels to the same thing (e.g. via `--new-tunnel`) can run concurrently on different ports without conflict.
+
 ## [0.10] - 2026-07-30
 
 - Added `--new-tunnel`/`-N` option to force opening a new tunnel instead of reusing an existing open tunnel.
