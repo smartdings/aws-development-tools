@@ -14,15 +14,25 @@ dependencies = [
   "boto3>=1.20.0",
   "docker>=4.0.0"
 ]
+keywords = ["aws", "iot", "secure-tunnel", "ssh", "docker"]
 classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "Environment :: Console",
+  "Topic :: System :: Networking",
   "Programming Language :: Python :: 3",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
 ]
-requires-python = ">=3.6"
-urls = { "Homepage" = "https://github.com/smartdings/aws-development-tools" }
+requires-python = ">=3.8"
+urls = { "Homepage" = "https://github.com/smartdings/aws-development-tools", "Source" = "https://github.com/smartdings/aws-development-tools/tree/main/iot/tunnel", "Changelog" = "https://github.com/smartdings/aws-development-tools/blob/main/iot/tunnel/CHANGELOG.md", "Issues" = "https://github.com/smartdings/aws-development-tools/issues" }
 
 license = { file = "LICENSE" }
 
 [project.scripts]
 aws-iot-tunnel = "aws_iot_tunnel.aws_iot_tunnel:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
