@@ -4,7 +4,7 @@
 ===============================================================================
 Script Name: aws_iot_tunnel.py
 Description: This script sets up and manages a secure tunnel to an AWS IoT device.
-Usage: ./aws_iot_tunnel.py --thing-name <thing_name> [--port <port>] [--profile <aws_profile>] [--region <region>] [--remove-fingerprint]
+Usage: ./aws_iot_tunnel.py --thing-name <thing_name> [--port <port>] [--profile <aws_profile>] [--region <region>] [--remove-fingerprint] [--new-tunnel]
 Requirements:
   - boto3: AWS SDK for Python
   - docker: Docker SDK for running containers
@@ -20,6 +20,7 @@ import docker.errors
 import subprocess
 import sys
 import platform
+from datetime import datetime, timezone
 from typing import Dict, Literal, Optional, Union
 
 # Constants
@@ -39,6 +40,7 @@ def parse_arguments() -> argparse.Namespace:
             - region: AWS region to use (optional)
             - port: Port to bind (default: 5555)
             - remove_fingerprint: Boolean flag to remove SSH fingerprint
+            - new_tunnel: Boolean flag to force opening a new tunnel instead of reusing an existing one
     """
     parser = argparse.ArgumentParser(description="Sets up and manages a secure tunnel to an AWS IoT device.")
 
@@ -47,6 +49,12 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("-r", "--region", type=str, help="AWS region to use")
     parser.add_argument("-P", "--port", type=int, default=DEFAULT_PORT, help="Port to bind")
     parser.add_argument("-R", "--remove-fingerprint", action="store_true", help="Remove SSH fingerprint")
+    parser.add_argument(
+        "-N",
+        "--new-tunnel",
+        action="store_true",
+        help="Force opening a new tunnel instead of reusing an existing open tunnel",
+    )
 
     args = parser.parse_args()
     return args
@@ -173,7 +181,8 @@ class SecureTunnel:
 
     def _get_existing_tunnel_id(self) -> Optional[str]:
         """
-        Retrieve the first existing open tunnel ID for the specified IoT Thing.
+        Retrieve an existing open tunnel ID for the specified IoT Thing. If more than one
+        open tunnel exists, the user is prompted to choose one, defaulting to the newest.
 
         Returns:
             Optional[str]: The tunnel ID if an open tunnel is found, otherwise None.
@@ -184,14 +193,62 @@ class SecureTunnel:
         try:
             response = self.client.list_tunnels(thingName=self.thing_name)
             tunnels = response.get("tunnelSummaries", [])
-            for tunnel in tunnels:
-                if tunnel.get("status") == "OPEN":
-                    return tunnel.get("tunnelId")
+            open_tunnels = [tunnel for tunnel in tunnels if tunnel.get("status") == "OPEN"]
+
+            if not open_tunnels:
+                return None
+
+            if len(open_tunnels) > 1:
+                open_tunnels.sort(key=lambda tunnel: tunnel.get("createdAt") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
         except Exception as e:
             print(f"Error: Failed to get existing tunnel ID. {e}", file=sys.stderr)
             sys.exit(1)
 
-        return None
+        if len(open_tunnels) == 1:
+            return open_tunnels[0].get("tunnelId")
+
+        return self._select_tunnel(open_tunnels)
+
+    def _select_tunnel(self, open_tunnels: list) -> str:
+        """
+        Prompt the user to pick which open tunnel to reuse when more than one exists,
+        defaulting to the newest tunnel.
+
+        Args:
+            open_tunnels (list): Open tunnel summaries, sorted newest-first.
+
+        Returns:
+            str: The tunnelId selected by the user (or the newest one by default).
+        """
+        newest_tunnel_id = open_tunnels[0].get("tunnelId")
+
+        print(f"Found {len(open_tunnels)} open tunnels for '{self.thing_name}':")
+        for index, tunnel in enumerate(open_tunnels, start=1):
+            suffix = " (newest)" if index == 1 else ""
+            print(f"  [{index}] {tunnel.get('tunnelId')} - created {tunnel.get('createdAt')}{suffix}")
+
+        if not sys.stdin.isatty():
+            print(f"Non-interactive session detected. Using newest tunnel: {newest_tunnel_id}")
+            return newest_tunnel_id
+
+        try:
+            choice = input(f"Select a tunnel to reuse [1-{len(open_tunnels)}] (default: 1): ").strip()
+        except EOFError:
+            choice = ""
+
+        if not choice:
+            return newest_tunnel_id
+
+        try:
+            index = int(choice)
+        except ValueError:
+            index = None
+
+        if index is not None and 1 <= index <= len(open_tunnels):
+            return open_tunnels[index - 1].get("tunnelId")
+
+        print(f"Invalid selection. Using newest tunnel: {newest_tunnel_id}")
+        return newest_tunnel_id
 
     def _get_access_token_client_mode(self, tunnel_id: str) -> Literal["ALL", "SOURCE"]:
         """
@@ -275,9 +332,12 @@ class SecureTunnel:
             print(f"Error: Failed to open new tunnel. {e}", file=sys.stderr)
             sys.exit(1)
 
-    def get_token(self) -> str:
+    def get_token(self, force_new: bool = False) -> str:
         """
         Retrieve the access token for the tunnel, either by finding an existing tunnel or creating a new one.
+
+        Args:
+            force_new (bool): If True, skip reusing an existing open tunnel and always open a new one.
 
         Returns:
             str: The source access token for the tunnel.
@@ -285,7 +345,7 @@ class SecureTunnel:
         Raises:
             SystemExit: If no valid access token is retrieved.
         """
-        existing_tunnel_id = self._get_existing_tunnel_id()
+        existing_tunnel_id = None if force_new else self._get_existing_tunnel_id()
 
         if existing_tunnel_id:
             print(f"Found existing tunnel ID: {existing_tunnel_id}")
@@ -293,7 +353,8 @@ class SecureTunnel:
             print(f"Rotating access tokens for tunnel ID: {existing_tunnel_id} in client mode {client_mode}")
             response = self._rotate_access_tokens(existing_tunnel_id, client_mode)
         else:
-            print("No existing tunnel found. Opening a new tunnel...")
+            reason = "reuse of existing tunnel disabled" if force_new else "no existing tunnel found"
+            print(f"Opening a new tunnel ({reason})...")
             response = self._open_new_tunnel()
 
         source_access_token = response.get("sourceAccessToken")
@@ -408,7 +469,7 @@ def main():
     docker_image = detect_architecture()
 
     secure_tunnel = SecureTunnel(args.thing_name, args.port, args.profile, args.region)
-    source_access_token = secure_tunnel.get_token()
+    source_access_token = secure_tunnel.get_token(force_new=args.new_tunnel)
     region_name = secure_tunnel.session.region_name
 
     run_docker_container(region_name, docker_image, args.thing_name, source_access_token, args.port)  # type: ignore

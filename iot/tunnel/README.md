@@ -61,12 +61,14 @@ OR
 | `--profile`            | `-p`       | string | No       | AWS profile to use for authentication.                  |
 | `--region`             | `-r`       | string | No       | AWS region to use (defaults to the configured region).  |
 | `--remove-fingerprint` | `-R`       |        | No       | Remove SSH fingerprint on localhost with specified port.|
+| `--new-tunnel`         | `-N`       |        | No       | Open a brand-new tunnel and leave any existing open tunnel(s) for the thing untouched (they are not closed).|
 
 ## How It Works
 
 1. **boto3 SDK**: The script interacts with the AWS IoT Secure Tunneling service using boto3 SDK to manage tunnels and rotate access tokens.
 2. **Docker Integration**: It runs a Docker container configured for the appropriate architecture to establish a secure tunnel to the specified IoT device.
-3. **Token Management**: The script checks for existing tunnels and manages the source access tokens required for secure communication.
+3. **Token Management**: The script checks for existing tunnels and manages the source access tokens required for secure communication. AWS IoT Secure Tunneling allows multiple tunnels to stay open for the same thing at once. If more than one open tunnel is found (e.g. after using `--new-tunnel`), the script lists them and prompts you to pick one to reuse, defaulting to the most recently created tunnel.
+4. **Explicit New Tunnels**: Use `--new-tunnel`/`-N` to always open a fresh tunnel instead of reusing an existing one. The previous tunnel(s) are left open (not closed) — the IoT device automatically reconnects its local proxy to whichever tunnel was opened most recently, so older tunnels become inactive but still count toward your account's tunnel quota until they expire.
 
 ## License
 

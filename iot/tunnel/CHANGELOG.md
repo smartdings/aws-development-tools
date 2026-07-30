@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.10] - 2026-07-30
+
+- Added `--new-tunnel`/`-N` option to force opening a new tunnel instead of reusing an existing open tunnel.
+- When multiple open tunnels exist for a thing, list them and prompt for which to reuse, defaulting to the newest, instead of picking an arbitrary one. The prompt is skipped automatically (defaulting to the newest) when stdin isn't a TTY, and Ctrl-C now aborts instead of silently proceeding.
+
 ## [0.9] - 2024-10-10
 
 - handle docker daemon not running exception gracefully.
